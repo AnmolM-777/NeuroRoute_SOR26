@@ -4,7 +4,6 @@ from typing import Optional
 
 from neuroroute.network.topology import TopologyManager
 
-
 class DijkstraRouter:
   """Computes shortest latency paths using Dijkstra's algorithm."""
 
@@ -62,10 +61,21 @@ class DijkstraRouter:
     return path if (path and path[0] == source) else []
 
   def get_next_hop(self, current: str, destination: str) -> Optional[str]:
-    """Returns immediate next-hop node along the active shortest path."""
+    """Returns immediate next-hop node along the active shortest path.
+
+    Uses precomputed routing tables from TopologyManager when available
+    (O(1) lookup). Falls back to live Dijkstra computation otherwise
+    (backward compatibility for standalone usage without registered nodes).
+    """
     if current == destination:
       return current
 
+    # Fast path: use precomputed tables from centralized TopologyManager
+    precomputed = self.topology.get_next_hop(current, destination)
+    if precomputed is not None:
+      return precomputed
+
+    # Fallback: live compute (for tests and standalone usage)
     path = self.get_shortest_path(current, destination)
     return path[1] if len(path) > 1 else None
 

@@ -16,6 +16,7 @@ class ChaosScheduler:
     self.spike_factor_range = spike_factor_range
     self._running = False
     self._task: Optional[asyncio.Task] = None
+    self._restoration_tasks: set[asyncio.Task] = set()
 
   def fail_link(self, src: str, dst: str) -> bool:
     """Disables a specific link."""
@@ -53,6 +54,23 @@ class ChaosScheduler:
         if node in self.topology.graph[src]:
           self.restore_link(src, node)
 
+  def _schedule_restoration(self, src: str, dst: str) -> None:
+    """Schedules an automatic restoration of a disrupted link after a random time."""
+    async def restore_task():
+      delay = random.uniform(1.0, 5.0)  # Fix disruption after 1 to 5 seconds
+      await asyncio.sleep(delay)
+      self.restore_link(src, dst)
+      # Optionally, you could log this restoration if a logger was available
+
+    try:
+      loop = asyncio.get_running_loop()
+    except RuntimeError:
+      return  # No running loop, can't schedule
+
+    task = loop.create_task(restore_task())
+    self._restoration_tasks.add(task)
+    task.add_done_callback(self._restoration_tasks.discard)
+
   def trigger_random_event(self) -> str:
     """Selects a random active link and applies a random chaos event."""
     links = self.topology.get_all_links()
@@ -60,18 +78,17 @@ class ChaosScheduler:
       return "no_links"
 
     src, dst = random.choice(links)
-    event_type = random.choice(["failure", "latency_spike", "restoration"])
+    event_type = random.choice(["failure", "latency_spike"])
 
     if event_type == "failure":
       self.fail_link(src, dst)
+      self._schedule_restoration(src, dst)
       return f"link_failed:{src}->{dst}"
     elif event_type == "latency_spike":
       factor = random.uniform(*self.spike_factor_range)
       self.spike_latency(src, dst, factor)
+      self._schedule_restoration(src, dst)
       return f"latency_spiked:{src}->{dst}:x{factor:.1f}"
-    else:
-      self.restore_link(src, dst)
-      return f"link_restored:{src}->{dst}"
 
   async def start(
       self, interval_seconds: float, duration_seconds: Optional[float] = None
@@ -93,3 +110,7 @@ class ChaosScheduler:
     self._running = False
     if self._task and not self._task.done():
       self._task.cancel()
+    for task in list(self._restoration_tasks):
+      if not task.done():
+        task.cancel()
+    self._restoration_tasks.clear()

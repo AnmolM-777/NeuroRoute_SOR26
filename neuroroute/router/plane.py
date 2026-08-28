@@ -378,9 +378,28 @@ class SimRouterNode(BaseRouterNode):
         self._running: bool = False
         self._task: Optional[asyncio.Task] = None
 
+        # Register with TopologyManager for centralized route pushes
+        if self.topology_manager is not None and hasattr(self.topology_manager, 'register_node'):
+            self.topology_manager.register_node(self)
+
     def set_peers(self, peers: Dict[str, BaseRouterNode]) -> None:
         """Register reference to all peer router nodes in the network."""
         self.peers = peers
+
+    def receive_routes(self, routes: Dict[str, Optional[str]]) -> None:
+        """Receive precomputed routes from TopologyManager and populate cache.
+
+        Called by TopologyManager._push_routes_to_nodes() whenever the
+        topology changes. Populates _route_cache with RouteEntry objects
+        for O(1) next-hop lookups, eliminating per-packet Dijkstra calls.
+        """
+        self._route_cache.clear()
+        for destination, next_hop in routes.items():
+            if next_hop is not None and destination != self.node_id:
+                self._route_cache[destination] = RouteEntry(
+                    destination_prefix=destination,
+                    next_hop=next_hop,
+                )
 
     # ---- Peer Management -----------------------------------------------
 
@@ -494,7 +513,10 @@ class SimRouterNode(BaseRouterNode):
         """
         Main execution loop for this router node.
         Dequeues incoming packets, applies latency delays, records hops, and forwards.
+        Supports continuous learning: feeds routing outcomes back to the strategy.
         """
+        _can_learn = self.strategy is not None and hasattr(self.strategy, "record_outcome")
+
         while not stop_event.is_set() or not self.is_empty:
             try:
                 packet = await asyncio.wait_for(self.dequeue(), timeout=0.05)
@@ -509,17 +531,34 @@ class SimRouterNode(BaseRouterNode):
                 delivery_time = time.time() - packet.creation_time
                 stats["packets_delivered"] += 1
                 stats["total_latency"] += delivery_time
+                # Reward the previous hop's routing decision that sent the packet here
+                if _can_learn and packet.hop_history:
+                    prev_node = packet.hop_history[-1]
+                    self.strategy.record_outcome(
+                        prev_node, packet.destination, self.node_id,
+                        delivered=True, dropped=False,
+                    )
                 continue
 
             # Use lookup_route() for a single consistent routing decision
             route = self.lookup_route(packet.destination)
             if route is None or not route.next_hop:
                 stats["packets_dropped"] += 1
+                if _can_learn:
+                    self.strategy.record_outcome(
+                        self.node_id, packet.destination, self.node_id,
+                        delivered=False, dropped=True,
+                    )
                 continue
 
             next_hop = route.next_hop
             if next_hop not in self.peers:
                 stats["packets_dropped"] += 1
+                if _can_learn:
+                    self.strategy.record_outcome(
+                        self.node_id, packet.destination, next_hop,
+                        delivered=False, dropped=True,
+                    )
                 continue
 
             # Simulate link latency if applicable
@@ -538,11 +577,28 @@ class SimRouterNode(BaseRouterNode):
                 updated_packet = packet.record_hop(self.node_id)
             except PacketValidationError:
                 stats["packets_dropped"] += 1
+                if _can_learn:
+                    self.strategy.record_outcome(
+                        self.node_id, packet.destination, next_hop,
+                        delivered=False, dropped=True,
+                    )
                 continue
 
             success = await peer_node.enqueue(updated_packet)
             if not success:
                 stats["packets_dropped"] += 1
+                if _can_learn:
+                    self.strategy.record_outcome(
+                        self.node_id, packet.destination, next_hop,
+                        delivered=False, dropped=True,
+                    )
+            else:
+                # Successful forward — intermediate hop feedback
+                if _can_learn:
+                    self.strategy.record_outcome(
+                        self.node_id, packet.destination, next_hop,
+                        delivered=False, dropped=False,
+                    )
     async def _forward_loop(self) -> None:
         """Worker loop running as an asyncio task to process inbound queue."""
         while self._running:

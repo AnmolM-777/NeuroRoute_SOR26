@@ -17,7 +17,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.traceback import install as install_rich_traceback
 
-from neuroroute.ai.agent import QLearningAgent
+from neuroroute.ai.agent import DQNAgent, QLearningAgent
 from neuroroute.ai.env import NetworkRoutingEnv
 from neuroroute.network.algorithms import Dijkstras, Random, RoundRobin
 from neuroroute.network.topology import TopologyManager
@@ -80,22 +80,31 @@ def print_banner(topology: str, steps: int, strategy: str) -> None:
 class QLearningStrategy:
     """Wrapper strategy around QLearningAgent and NetworkRoutingEnv."""
 
-    def __init__(self, topo: TopologyManager) -> None:
+    def __init__(self, topo: TopologyManager, continuous_learning: bool = False) -> None:
         self.topo = topo
         self.nodes = sorted(topo.get_all_nodes())
         num_nodes = len(self.nodes)
         self.node_to_idx = {node: i for i, node in enumerate(self.nodes)}
+        self.continuous_learning = continuous_learning
         self.agent = QLearningAgent(
             num_states=num_nodes,
             num_actions=num_nodes,
-            epsilon=0.1,
+            learning_rate=0.3,
+            epsilon=0.15 if continuous_learning else 0.1,
         )
         if os.path.exists("q_table.json"):
             try:
                 self.agent.load_q_table("q_table.json")
-                self.agent.epsilon = 0.0
+                if not continuous_learning:
+                    self.agent.epsilon = 0.0
+                else:
+                    # Keep a small exploration rate for adaptation
+                    self.agent.epsilon = 0.1
+                    self.agent.min_epsilon = 0.05
+                    self.agent.epsilon_decay = 0.9999
             except Exception:
                 pass
+
         self.env = NetworkRoutingEnv(
             num_nodes=num_nodes,
             topology_graph=topo,
@@ -107,6 +116,9 @@ class QLearningStrategy:
             idx = self.node_to_idx[node_name]
             self._mask_cache[idx] = self.env.get_action_mask(idx)
 
+        # Pending transition state for continuous learning feedback
+        self._pending: Dict[str, Any] = {}
+
     def get_next_hop(self, current: str, destination: str) -> Optional[str]:
         if current == destination:
             return current
@@ -117,21 +129,173 @@ class QLearningStrategy:
         curr_idx = self.node_to_idx[current]
         dest_idx = self.node_to_idx[destination]
 
-        # Use compact (current, destination) state — both integers pass through
-        # quantize_state unchanged, giving N*(N-1) unique Q-table keys that
-        # tabular Q-learning can fully cover with modest training
         state = (curr_idx, dest_idx)
         action_mask = self._mask_cache[curr_idx]
         action_idx = self.agent.choose_action(state, valid_actions=action_mask)
 
         if 0 <= action_idx < len(self.nodes) and action_mask[action_idx]:
-            return self.nodes[action_idx]
+            chosen_hop = self.nodes[action_idx]
+            # Store transition for learning feedback
+            if self.continuous_learning:
+                self._pending[f"{current}:{destination}"] = {
+                    "state": state,
+                    "action": action_idx,
+                    "dest_idx": dest_idx,
+                }
+            return chosen_hop
 
         neighbours = self.topo.get_neighbours(current)
         return random.choice(neighbours) if neighbours else None
 
+    def record_outcome(self, current: str, destination: str, next_hop: str,
+                       delivered: bool, dropped: bool) -> None:
+        """Record the outcome of a forwarding decision and update Q-table."""
+        if not self.continuous_learning:
+            return
 
-def get_strategy(strategy_name: str, topo: TopologyManager) -> Any:
+        key = f"{current}:{destination}"
+        pending = self._pending.pop(key, None)
+        if pending is None:
+            return
+
+        state = pending["state"]
+        action = pending["action"]
+        dest_idx = pending["dest_idx"]
+
+        if delivered:
+            reward = 50.0
+        elif dropped:
+            reward = -30.0
+        else:
+            # Intermediate hop: small penalty proportional to distance remaining
+            next_idx = self.node_to_idx.get(next_hop, action)
+            reward = -1.0
+
+        next_state = (self.node_to_idx.get(next_hop, action), dest_idx)
+        done = delivered or dropped
+        self.agent.update(state, action, reward, next_state, done)
+
+    def save_learned_weights(self) -> None:
+        """Save updated Q-table after continuous learning session."""
+        if self.continuous_learning:
+            self.agent.save_q_table("q_table.json")
+
+
+class DQNStrategy:
+    """Wrapper strategy around DQNAgent and NetworkRoutingEnv."""
+
+    def __init__(self, topo: TopologyManager, continuous_learning: bool = False) -> None:
+        self.topo = topo
+        self.nodes = sorted(topo.get_all_nodes())
+        num_nodes = len(self.nodes)
+        self.node_to_idx = {node: i for i, node in enumerate(self.nodes)}
+        self.continuous_learning = continuous_learning
+
+        obs_dim = 2 * num_nodes + 1
+        self.agent = DQNAgent(
+            state_dim=obs_dim,
+            action_dim=num_nodes,
+        )
+        if os.path.exists("dqn_model.pt"):
+            try:
+                self.agent.load_model("dqn_model.pt")
+                if not continuous_learning:
+                    self.agent.epsilon = 0.0
+                else:
+                    self.agent.epsilon = 0.1
+                    self.agent.min_epsilon = 0.05
+                    self.agent.epsilon_decay = 0.9999
+            except Exception:
+                pass
+        self.env = NetworkRoutingEnv(
+            num_nodes=num_nodes,
+            topology_graph=topo,
+        )
+        self.router_nodes = None
+        self._pending: Dict[str, Any] = {}
+        self._update_counter: int = 0
+        self._target_update_freq: int = 50
+
+    def set_router_nodes(self, router_nodes: Dict[str, Any]) -> None:
+        self.router_nodes = [router_nodes[n] for n in self.nodes]
+
+    def get_next_hop(self, current: str, destination: str) -> Optional[str]:
+        if current == destination:
+            return current
+
+        if current not in self.node_to_idx or destination not in self.node_to_idx:
+            return None
+
+        curr_idx = self.node_to_idx[current]
+        dest_idx = self.node_to_idx[destination]
+
+        obs, _ = self.env.reset(options={
+            "current_node": curr_idx,
+            "destination_node": dest_idx,
+            "router_nodes": self.router_nodes
+        })
+
+        action_mask = self.env.get_action_mask(curr_idx)
+        action_idx = self.agent.choose_action(obs, valid_actions=action_mask)
+
+        if 0 <= action_idx < len(self.nodes) and action_mask[action_idx]:
+            chosen_hop = self.nodes[action_idx]
+            if self.continuous_learning:
+                self._pending[f"{current}:{destination}"] = {
+                    "obs": obs,
+                    "action": action_idx,
+                    "dest_idx": dest_idx,
+                }
+            return chosen_hop
+
+        neighbours = self.topo.get_neighbours(current)
+        return random.choice(neighbours) if neighbours else None
+
+    def record_outcome(self, current: str, destination: str, next_hop: str,
+                       delivered: bool, dropped: bool) -> None:
+        """Record the outcome of a forwarding decision and update DQN."""
+        if not self.continuous_learning:
+            return
+
+        key = f"{current}:{destination}"
+        pending = self._pending.pop(key, None)
+        if pending is None:
+            return
+
+        obs = pending["obs"]
+        action = pending["action"]
+        dest_idx = pending["dest_idx"]
+
+        if delivered:
+            reward = 50.0
+        elif dropped:
+            reward = -30.0
+        else:
+            reward = -1.0
+
+        # Build next observation
+        next_hop_idx = self.node_to_idx.get(next_hop, action)
+        next_obs, _ = self.env.reset(options={
+            "current_node": next_hop_idx,
+            "destination_node": dest_idx,
+            "router_nodes": self.router_nodes,
+        })
+        done = delivered or dropped
+
+        self.agent.replay_buffer.push(obs, action, reward, next_obs, done)
+        self.agent.update()
+
+        self._update_counter += 1
+        if self._update_counter % self._target_update_freq == 0:
+            self.agent.update_target_network()
+
+    def save_learned_weights(self) -> None:
+        """Save updated DQN model after continuous learning session."""
+        if self.continuous_learning:
+            self.agent.save_model("dqn_model.pt")
+
+
+def get_strategy(strategy_name: str, topo: TopologyManager, continuous_learning: bool = False) -> Any:
     name = strategy_name.lower().replace("-", "").replace("_", "")
     if name in ("static", "dijkstra", "dijkstras"):
         return Dijkstras(topo)
@@ -140,7 +304,9 @@ def get_strategy(strategy_name: str, topo: TopologyManager) -> Any:
     elif name == "random":
         return Random(topo)
     elif name in ("qlearning", "qlearningagent", "ql"):
-        return QLearningStrategy(topo)
+        return QLearningStrategy(topo, continuous_learning=continuous_learning)
+    elif name == "dqn":
+        return DQNStrategy(topo, continuous_learning=continuous_learning)
     else:
         raise ValueError(f"Unknown routing strategy: {strategy_name}")
 
@@ -190,6 +356,7 @@ async def run_simulation(
     logger: logging.Logger,
     use_tui: bool = False,
     enable_chaos: bool = False,
+    continuous_learning: bool = False,
 ) -> Dict[str, Any]:
     logger.info("Loading topology from '%s'...", topology_path)
     topo = TopologyManager()
@@ -200,7 +367,9 @@ async def run_simulation(
         raise ValueError(f"No nodes found in topology file {topology_path}")
 
     logger.info("Initializing %d router nodes...", len(nodes))
-    strategy = get_strategy(strategy_name, topo)
+    strategy = get_strategy(strategy_name, topo, continuous_learning=continuous_learning)
+    if continuous_learning:
+        logger.info("Continuous Learning ENABLED: Model weights will update during simulation.")
 
     router_nodes: Dict[str, SimRouterNode] = {
         node_id: SimRouterNode(node_id, topo, strategy) for node_id in nodes
@@ -208,6 +377,9 @@ async def run_simulation(
 
     for node in router_nodes.values():
         node.set_peers(router_nodes)
+
+    # Push initial precomputed routes into all router node caches
+    topo.recompute_routes()
 
     # Give adaptive strategies access to live router node state
     if hasattr(strategy, "set_router_nodes"):
@@ -273,6 +445,11 @@ async def run_simulation(
     await asyncio.gather(*node_tasks, return_exceptions=True)
     if chaos_task:
         await asyncio.gather(chaos_task, return_exceptions=True)
+
+    # Save updated weights if continuous learning was active
+    if continuous_learning and hasattr(strategy, "save_learned_weights"):
+        strategy.save_learned_weights()
+        logger.info("Continuous learning weights saved.")
     if tui_task:
         await asyncio.gather(tui_task, return_exceptions=True)
 
@@ -331,7 +508,7 @@ def display_summary(stats: Dict[str, Any], strategy: str, topology: str) -> None
     "-r",
     "--strategy",
     "strategy",
-    type=click.Choice(["static", "round-robin", "random", "qlearning"], case_sensitive=False),
+    type=click.Choice(["static", "round-robin", "random", "qlearning", "dqn"], case_sensitive=False),
     default="static",
     show_default=True,
     help="Routing strategy/algorithm to execute.",
@@ -351,6 +528,13 @@ def display_summary(stats: Dict[str, Any], strategy: str, topology: str) -> None
     help="Inject random link failures and latency spikes during simulation.",
 )
 @click.option(
+    "--learn",
+    "continuous_learning",
+    is_flag=True,
+    default=False,
+    help="Enable continuous learning: model updates weights during simulation (qlearning/dqn only).",
+)
+@click.option(
     "-v",
     "--verbose",
     "verbose",
@@ -358,7 +542,7 @@ def display_summary(stats: Dict[str, Any], strategy: str, topology: str) -> None
     help="Increase logging verbosity. Use -v for INFO, -vv for DEBUG.",
 )
 @click.version_option(version=__version__, prog_name="neuroroute-simulate")
-def main(topology: str, steps: int, strategy: str, use_tui: bool, enable_chaos: bool, verbose: int) -> None:
+def main(topology: str, steps: int, strategy: str, use_tui: bool, enable_chaos: bool, continuous_learning: bool, verbose: int) -> None:
     logger = configure_logging(verbose)
     if not use_tui:
         print_banner(topology, steps, strategy)
@@ -367,7 +551,7 @@ def main(topology: str, steps: int, strategy: str, use_tui: bool, enable_chaos: 
     start_time = time.time()
 
     try:
-        stats = asyncio.run(run_simulation(topology, steps, strategy, logger, use_tui=use_tui, enable_chaos=enable_chaos))
+        stats = asyncio.run(run_simulation(topology, steps, strategy, logger, use_tui=use_tui, enable_chaos=enable_chaos, continuous_learning=continuous_learning))
     except KeyboardInterrupt:
         logger.warning("\n[bold yellow]Simulation interrupted by user (Ctrl+C). Cleaning up...[/bold yellow]")
         if stats is None:

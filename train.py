@@ -33,6 +33,9 @@ def train_qlearning(
 
     topo = TopologyManager()
     if os.path.exists("configs/square-topology.json"):
+        # set custom training topology here
+        # topo.load_topology("configs/my-custom-topology.json")
+        # env = NetworkRoutingEnv(num_nodes=len(topo.get_all_nodes()), topology_graph=topo)
         topo.load_topology("configs/square-topology.json")
     num_nodes = len(topo.get_all_nodes()) if topo else num_nodes
 
@@ -146,7 +149,17 @@ def train_dqn(
     save_path: str,
 ) -> None:
     """Train Deep Q-Network (DQN) Agent."""
-    env = NetworkRoutingEnv(num_nodes=num_nodes)
+    from neuroroute.network.topology import TopologyManager
+    import os
+
+    topo = TopologyManager()
+    if os.path.exists("configs/square-topology.json"):
+        # set custom training topology here
+        # topo.load_topology("configs/my-custom-topology.json")
+        topo.load_topology("configs/square-topology.json")
+    num_nodes = len(topo.get_all_nodes()) if topo.get_all_nodes() else num_nodes
+
+    env = NetworkRoutingEnv(num_nodes=num_nodes, topology_graph=topo)
     obs_dim = 2 * num_nodes + 1
     agent = DQNAgent(
         state_dim=obs_dim,
