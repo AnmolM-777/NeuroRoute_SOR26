@@ -39,7 +39,8 @@ def test_env_initialization_and_spaces():
     assert env.action_space.n == num_nodes
 
     # Observation space check
-    obs_dim = 2 * num_nodes + 1
+    # Observation space: 3 * num_nodes + 1 = 16
+    obs_dim = 3 * num_nodes + 1
     assert isinstance(env.observation_space, gym.spaces.Box)
     assert env.observation_space.shape == (obs_dim,)
     assert env.observation_space.dtype == np.float32
@@ -75,7 +76,7 @@ def test_env_step_valid_action_and_reward():
     obs, reward, terminated, truncated, info = env.step(1)
 
     assert isinstance(obs, np.ndarray)
-    assert reward == 50.0  # Target destination reached reward
+    assert reward == pytest.approx(98.0)  # max(10, 100 - 2*1) = 98.0, step-aware delivery
     assert terminated is True
     assert truncated is False
     assert info["successful_deliveries"] == 1
@@ -229,7 +230,7 @@ def test_agent_save_and_load_q_table(tmp_path):
 def test_replay_buffer_push_and_sample():
     """Test ReplayBuffer capacity, pushing, and tensor conversion shapes."""
     buffer = ReplayBuffer(capacity=100)
-    state_dim = 11
+    state_dim = 16
 
     for i in range(50):
         s = np.random.randn(state_dim).astype(np.float32)
@@ -258,7 +259,7 @@ def test_replay_buffer_push_and_sample():
 
 def test_dqn_agent_action_selection_and_masking():
     """Test DQNAgent action selection with torch.no_grad context and valid action mask."""
-    state_dim = 11
+    state_dim = 16
     action_dim = 5
     agent = DQNAgent(state_dim=state_dim, action_dim=action_dim, epsilon=0.0)
 

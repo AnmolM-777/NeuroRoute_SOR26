@@ -139,6 +139,16 @@ class TUIState:
             # Store in ms
             self.total_latency_ms = raw_lat * 1000.0 if raw_lat < 1000.0 else raw_lat
 
+        if self.topology_manager:
+            new_links = []
+            for src, neighbors in self.topology_manager.graph.items():
+                for dst, metrics in neighbors.items():
+                    lat = float(metrics.get("latency", 0.0))
+                    bw = float(metrics.get("bandwidth", 0.0))
+                    active = metrics.get("active", True)
+                    new_links.append((src, dst, lat, bw, active))
+            self.links = new_links
+
         self.throughput_pps = self.packets_delivered / self.runtime
 
         avg_lat = self.average_latency
@@ -199,18 +209,32 @@ def make_topology_panel(state: TUIState) -> Panel:
     table.add_column("Bandwidth", justify="right", style="green")
     table.add_column("Status", justify="center")
 
-    for src, dst, lat, bw in state.links:
+    for link_data in state.links:
+        if len(link_data) == 5:
+            src, dst, lat, bw, active = link_data
+        else:
+            src, dst, lat, bw = link_data
+            active = True
+
+        if not active:
+            lat_str = "[bold red]--[/bold red]"
+            status_str = "[bold red blink]DOWN[/bold red blink]"
+            bw_str = "[bold red]--[/bold red]"
+            table.add_row(src, dst, lat_str, bw_str, status_str)
+            continue
+
+        bw_str = f"{bw:.0f} Mbps"
         if lat < 30.0:
             lat_str = f"[bold green]{lat:.1f} ms[/bold green]"
             status_str = "[bold green]OPTIMAL[/bold green]"
         elif lat < 70.0:
             lat_str = f"[bold yellow]{lat:.1f} ms[/bold yellow]"
-            status_str = "[bold yellow]NORMAL[/bold yellow]"
+            status_str = "[bold yellow]DEGRADED[/bold yellow]"
         else:
             lat_str = f"[bold red]{lat:.1f} ms[/bold red]"
-            status_str = "[bold red]HIGH-LATENCY[/bold red]"
+            status_str = "[bold red]CRITICAL[/bold red]"
 
-        table.add_row(src, dst, lat_str, f"{bw:.0f} Mbps", status_str)
+        table.add_row(src, dst, lat_str, bw_str, status_str)
 
     return Panel(table, title="[bold green]Network Topology & Link Status[/bold green]", border_style="cyan")
 

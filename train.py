@@ -20,6 +20,20 @@ from neuroroute.ai.env import NetworkRoutingEnv
 console = Console()
 
 
+def _get_congestion_bucket(env: NetworkRoutingEnv, node_idx: int) -> int:
+    """Discretize queue depth at a node into 3 congestion levels (0=low, 1=med, 2=high).
+
+    This keeps the Q-table tractable while giving the agent awareness of traffic.
+    """
+    ratio = env.queue_depths[node_idx] / float(env.max_queue_capacity)
+    if ratio < 0.33:
+        return 0  # low
+    elif ratio < 0.66:
+        return 1  # medium
+    else:
+        return 2  # high
+
+
 def train_qlearning(
     episodes: int,
     num_nodes: int,
@@ -66,15 +80,16 @@ def train_qlearning(
         steps = 0
 
         while not done:
-            # Use compact (current_node, destination) state for tabular Q-learning
-            # This gives N*(N-1) unique states — fully learnable for small networks
-            state = (env.current_node, dst)
+            # State now includes congestion bucket (Fix for Issue B)
+            congestion = _get_congestion_bucket(env, env.current_node)
+            state = (env.current_node, dst, congestion)
             action_mask = env.get_action_mask(env.current_node)
             action = agent.choose_action(state, valid_actions=action_mask)
             next_obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
 
-            next_state = (env.current_node, dst)
+            next_congestion = _get_congestion_bucket(env, env.current_node)
+            next_state = (env.current_node, dst, next_congestion)
             agent.update(state, action, reward, next_state, done)
             obs = next_obs
             ep_reward += reward
@@ -115,7 +130,8 @@ def train_qlearning(
         done = False
         steps = 0
         while not done and steps < 20:
-            state = (env.current_node, dst)
+            congestion = _get_congestion_bucket(env, env.current_node)
+            state = (env.current_node, dst, congestion)
             mask = env.get_action_mask(env.current_node)
             action = agent.choose_action(state, valid_actions=mask)
             obs, reward, terminated, truncated, _ = env.step(action)
@@ -160,7 +176,13 @@ def train_dqn(
     num_nodes = len(topo.get_all_nodes()) if topo.get_all_nodes() else num_nodes
 
     env = NetworkRoutingEnv(num_nodes=num_nodes, topology_graph=topo)
-    obs_dim = 2 * num_nodes + 1
+    obs_dim = 3 * num_nodes + 1  # queues + dest + latencies + bandwidths
+    # Override defaults if they are the click defaults (which are tuned for Q-Learning)
+    if lr == 0.1:
+        lr = 0.001
+    if epsilon_decay == 0.96:
+        epsilon_decay = 0.995
+
     agent = DQNAgent(
         state_dim=obs_dim,
         action_dim=num_nodes,
@@ -172,14 +194,17 @@ def train_dqn(
         batch_size=batch_size,
     )
 
+    # Target network update frequency (critical for stable DQN training)
+    target_update_freq = 100
+
     console.print(f"[bold cyan]Starting DQN Training ({episodes} episodes, {num_nodes} nodes)...[/bold cyan]")
 
     successful_episodes = 0
     total_rewards = []
 
     for episode in range(1, episodes + 1):
-        src = np.random.randint(0, num_nodes - 1)
-        dst = num_nodes - 1
+        # Fix for Issue C: Random source AND destination (not fixed dst)
+        src, dst = random.sample(range(num_nodes), 2)
         obs, info = env.reset(options={"current_node": src, "destination_node": dst})
 
         done = False
@@ -202,6 +227,10 @@ def train_dqn(
 
         total_rewards.append(ep_reward)
 
+        # Periodically sync target network (critical for training stability)
+        if episode % target_update_freq == 0:
+            agent.update_target_network()
+
         if episode % max(1, episodes // 5) == 0:
             succ_rate = (successful_episodes / episode) * 100
             avg_rew = np.mean(total_rewards[-50:])
@@ -212,8 +241,49 @@ def train_dqn(
                 f"Avg Reward: {avg_rew:6.2f}"
             )
 
+    # Set epsilon to 0 before saving (deployment mode)
+    agent.epsilon = 0.0
     agent.save_model(save_path)
     console.print(f"[bold green]✔ PyTorch DQN Model saved to '{save_path}'[/bold green]")
+
+    # DQN Evaluation Phase (pure exploitation, epsilon = 0.0)
+    eval_episodes = num_nodes * (num_nodes - 1) * 2
+    console.print(f"\n[bold yellow]Evaluating Trained DQN Agent ({eval_episodes} episodes, Exploitation Mode)...[/bold yellow]")
+    eval_successes = 0
+    eval_steps = []
+    eval_rewards = []
+
+    for episode in range(eval_episodes):
+        src, dst = random.sample(range(num_nodes), 2)
+        obs, info = env.reset(options={"current_node": src, "destination_node": dst})
+        done = False
+        steps = 0
+        ep_reward = 0.0
+        while not done and steps < 20:
+            mask = env.get_action_mask(env.current_node)
+            action = agent.choose_action(obs, valid_actions=mask)
+            obs, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+            ep_reward += reward
+            steps += 1
+
+        if terminated and env.current_node == dst:
+            eval_successes += 1
+            eval_steps.append(steps)
+        eval_rewards.append(ep_reward)
+
+    eval_rate = (eval_successes / eval_episodes) * 100
+    avg_eval_steps = np.mean(eval_steps) if eval_steps else 0.0
+    avg_eval_reward = np.mean(eval_rewards)
+
+    table = Table(title="DQN Evaluation Summary", expand=False)
+    table.add_column("Metric", style="bold cyan")
+    table.add_column("Value", style="bold green", justify="right")
+    table.add_row("Evaluation Delivery Rate", f"{eval_rate:.1f}%")
+    table.add_row("Avg Hops per Delivery", f"{avg_eval_steps:.2f}")
+    table.add_row("Avg Reward per Episode", f"{avg_eval_reward:.2f}")
+    table.add_row("Final Epsilon", f"{agent.epsilon:.3f}")
+    console.print(table)
 
 
 @click.command()
@@ -236,6 +306,12 @@ def train_dqn(
     default="q_table.json",
     help="File path to save the trained model / Q-table checkpoint.",
 )
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Random seed for reproducible training results.",
+)
 def main(
     agent_type: str,
     episodes: int,
@@ -245,8 +321,18 @@ def main(
     epsilon_decay: float,
     batch_size: int,
     save_path: str,
+    seed: int,
 ) -> None:
     """NeuroRoute AI Training Command Line Tool."""
+
+    # Set deterministic seeds for reproducible results
+    if seed is not None:
+        import torch
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        console.print(f"[dim]Using random seed: {seed}[/dim]")
+
     console.print(
         Panel.fit(
             f"[bold green]NeuroRoute AI Trainer[/bold green]\n"

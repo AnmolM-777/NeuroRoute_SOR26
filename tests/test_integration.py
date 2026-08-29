@@ -109,7 +109,7 @@ def test_packet_traversal_diamond_topology_dqn(diamond_topology):
     Integration Test: Train DQNAgent on diamond topology and evaluate performance.
     """
     env = NetworkRoutingEnv(num_nodes=4, topology_graph=diamond_topology)
-    obs_dim = 2 * 4 + 1
+    obs_dim = 3 * 4 + 1
     agent = DQNAgent(
         state_dim=obs_dim,
         action_dim=4,

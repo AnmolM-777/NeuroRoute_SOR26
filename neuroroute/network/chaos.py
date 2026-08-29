@@ -106,7 +106,7 @@ class ChaosScheduler:
         break
 
   def stop(self) -> None:
-    """Stops the chaos scheduler loop."""
+    """Stops the chaos scheduler loop and restores all links to normal."""
     self._running = False
     if self._task and not self._task.done():
       self._task.cancel()
@@ -114,3 +114,11 @@ class ChaosScheduler:
       if not task.done():
         task.cancel()
     self._restoration_tasks.clear()
+
+    # Fully restore topology before exiting
+    for src, neighbors in self.topology.graph.items():
+        for dst, metrics in neighbors.items():
+            if not metrics.get("active", True):
+                self.restore_link(src, dst)
+            elif metrics.get("latency", 0) != metrics.get("base_latency", 0):
+                self.topology.restore_link_latency(src, dst)

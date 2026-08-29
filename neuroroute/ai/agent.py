@@ -238,11 +238,11 @@ class DQNModel(nn.Module):
         self.action_dim = action_dim
 
         self.net = nn.Sequential(
-            nn.Linear(state_dim, 64),
+            nn.Linear(state_dim, 128),
             nn.ReLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(64, action_dim),
+            nn.Linear(128, action_dim),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -531,7 +531,14 @@ class DQNAgent:
         dir_name = os.path.dirname(os.path.abspath(filepath))
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
-        torch.save(self.policy_net.state_dict(), filepath)
+        checkpoint = {
+            "policy_net_state_dict": self.policy_net.state_dict(),
+            "state_dim": self.state_dim,
+            "action_dim": self.action_dim,
+            "epsilon": self.epsilon,
+            "gamma": self.gamma,
+        }
+        torch.save(checkpoint, filepath)
 
     def load_model(self, filepath: str) -> None:
         """
@@ -539,8 +546,14 @@ class DQNAgent:
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Model file not found: {filepath}")
-        state_dict = torch.load(filepath, weights_only=True)
-        self.policy_net.load_state_dict(state_dict)
+        checkpoint = torch.load(filepath, weights_only=False)
+        # Support both old (raw state_dict) and new (checkpoint dict) formats
+        if isinstance(checkpoint, dict) and "policy_net_state_dict" in checkpoint:
+            self.policy_net.load_state_dict(checkpoint["policy_net_state_dict"])
+            self.epsilon = checkpoint.get("epsilon", 0.0)
+        else:
+            # Legacy format: raw state dict
+            self.policy_net.load_state_dict(checkpoint)
         self.update_target_network()
         self.traced_policy_net = None
         self.is_optimized = False

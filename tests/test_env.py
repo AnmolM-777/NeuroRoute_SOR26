@@ -20,8 +20,8 @@ class TestNetworkRoutingEnv(unittest.TestCase):
         self.assertEqual(env.action_space.n, 5)
         self.assertIsInstance(env.action_space, gym.spaces.Discrete)
 
-        # Observation space: 2 * num_nodes + 1 = 11
-        self.assertEqual(env.observation_space.shape, (11,))
+        # Observation space: 3 * num_nodes + 1 = 16
+        self.assertEqual(env.observation_space.shape, (16,))
         self.assertIsInstance(env.observation_space, gym.spaces.Box)
         self.assertEqual(env.observation_space.dtype, np.float32)
 
@@ -48,7 +48,7 @@ class TestNetworkRoutingEnv(unittest.TestCase):
             options={"current_node": 1, "destination_node": 3, "queue_depths": [10, 20, 30, 40, 50]},
         )
 
-        self.assertEqual(obs.shape, (11,))
+        self.assertEqual(obs.shape, (16,))
         self.assertEqual(info["current_node"], 1)
         self.assertEqual(info["destination_node"], 3)
         self.assertEqual(env.step_count, 0)
@@ -98,7 +98,7 @@ class TestNetworkRoutingEnv(unittest.TestCase):
         # Action 1 reaches destination node 1
         obs, reward, terminated, truncated, info = env.step(1)
 
-        self.assertEqual(reward, 50.0)
+        self.assertEqual(reward, 98.0)  # max(10, 100 - 2*1) = 98
         self.assertTrue(terminated)
         self.assertEqual(env.successful_deliveries, 1)
 
@@ -112,7 +112,7 @@ class TestNetworkRoutingEnv(unittest.TestCase):
 
         obs, reward, terminated, truncated, info = env.step(1)
 
-        self.assertEqual(reward, -20.0)
+        self.assertEqual(reward, -50.0)
         self.assertFalse(terminated)
         self.assertEqual(env.dropped_packets, 1)
 

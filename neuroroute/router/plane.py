@@ -417,17 +417,30 @@ class SimRouterNode(BaseRouterNode):
 
     # ---- Route Lookup --------------------------------------------------
 
-    def lookup_route(self, destination: str) -> Optional[RouteEntry]:
+    def lookup_route(self, destination: str, prev_hop: Optional[str] = None) -> Optional[RouteEntry]:
         """
         Resolve destination to a RouteEntry.
         Supports cached O(1) lookup, exact destination match, and prefix matching.
 
         When a dynamic strategy (e.g. Q-learning) is set, the cache is bypassed
         so the strategy is consulted on every routing decision.
+
+        Args:
+            destination: Target node to route toward.
+            prev_hop: The node this packet just came from (for anti-bounce).
         """
         # Dynamic strategies must be consulted every time — never cache their decisions
         if self.strategy:
-            next_hop = self.strategy.get_next_hop(self.node_id, destination)
+            # Pass prev_hop if the strategy supports it (RL strategies do)
+            if prev_hop is not None and hasattr(self.strategy, 'get_next_hop'):
+                import inspect
+                sig = inspect.signature(self.strategy.get_next_hop)
+                if 'prev_hop' in sig.parameters:
+                    next_hop = self.strategy.get_next_hop(self.node_id, destination, prev_hop=prev_hop)
+                else:
+                    next_hop = self.strategy.get_next_hop(self.node_id, destination)
+            else:
+                next_hop = self.strategy.get_next_hop(self.node_id, destination)
             if next_hop:
                 return RouteEntry(destination_prefix=destination, next_hop=next_hop)
 
@@ -541,7 +554,9 @@ class SimRouterNode(BaseRouterNode):
                 continue
 
             # Use lookup_route() for a single consistent routing decision
-            route = self.lookup_route(packet.destination)
+            # Extract prev_hop from packet history for anti-bounce logic
+            prev_hop = packet.hop_history[-1] if packet.hop_history else None
+            route = self.lookup_route(packet.destination, prev_hop=prev_hop)
             if route is None or not route.next_hop:
                 stats["packets_dropped"] += 1
                 if _can_learn:

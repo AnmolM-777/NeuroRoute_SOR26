@@ -77,6 +77,17 @@ def print_banner(topology: str, steps: int, strategy: str) -> None:
     )
 
 
+def _get_congestion_bucket(env: NetworkRoutingEnv, node_idx: int) -> int:
+    """Discretize queue depth at a node into 3 congestion levels (0=low, 1=med, 2=high)."""
+    ratio = env.queue_depths[node_idx] / float(env.max_queue_capacity)
+    if ratio < 0.33:
+        return 0
+    elif ratio < 0.66:
+        return 1
+    else:
+        return 2
+
+
 class QLearningStrategy:
     """Wrapper strategy around QLearningAgent and NetworkRoutingEnv."""
 
@@ -98,7 +109,6 @@ class QLearningStrategy:
                 if not continuous_learning:
                     self.agent.epsilon = 0.0
                 else:
-                    # Keep a small exploration rate for adaptation
                     self.agent.epsilon = 0.1
                     self.agent.min_epsilon = 0.05
                     self.agent.epsilon_decay = 0.9999
@@ -116,10 +126,16 @@ class QLearningStrategy:
             idx = self.node_to_idx[node_name]
             self._mask_cache[idx] = self.env.get_action_mask(idx)
 
+        # Router nodes reference for live queue sync
+        self.router_nodes: Optional[Dict[str, Any]] = None
         # Pending transition state for continuous learning feedback
         self._pending: Dict[str, Any] = {}
 
-    def get_next_hop(self, current: str, destination: str) -> Optional[str]:
+    def set_router_nodes(self, router_nodes: Dict[str, Any]) -> None:
+        self.router_nodes = router_nodes
+
+    def get_next_hop(self, current: str, destination: str,
+                     prev_hop: Optional[str] = None) -> Optional[str]:
         if current == destination:
             return current
 
@@ -129,27 +145,50 @@ class QLearningStrategy:
         curr_idx = self.node_to_idx[current]
         dest_idx = self.node_to_idx[destination]
 
-        state = (curr_idx, dest_idx)
-        action_mask = self._mask_cache[curr_idx]
+        # Sync live queue depths from data plane
+        if self.router_nodes:
+            for name, idx in self.node_to_idx.items():
+                if name in self.router_nodes and hasattr(self.router_nodes[name], "queue_length"):
+                    self.env.queue_depths[idx] = float(self.router_nodes[name].queue_length)
+
+        congestion = _get_congestion_bucket(self.env, curr_idx)
+        state = (curr_idx, dest_idx, congestion)
+        action_mask = self._mask_cache[curr_idx].copy()
+
+        # Anti-bounce: mask out the node we just came from
+        if prev_hop and prev_hop in self.node_to_idx:
+            prev_idx = self.node_to_idx[prev_hop]
+            # Only mask if there are other valid actions
+            if action_mask.sum() > 1:
+                action_mask[prev_idx] = False
+
         action_idx = self.agent.choose_action(state, valid_actions=action_mask)
 
         if 0 <= action_idx < len(self.nodes) and action_mask[action_idx]:
             chosen_hop = self.nodes[action_idx]
-            # Store transition for learning feedback
             if self.continuous_learning:
                 self._pending[f"{current}:{destination}"] = {
                     "state": state,
                     "action": action_idx,
                     "dest_idx": dest_idx,
+                    "current": current,
                 }
             return chosen_hop
 
-        neighbours = self.topo.get_neighbours(current)
-        return random.choice(neighbours) if neighbours else None
+        # Fallback: never random — pick the valid action with best Q-value
+        valid_indices = np.where(action_mask)[0]
+        if len(valid_indices) > 0:
+            q_values = self.agent.get_q_values(state)
+            best_idx = valid_indices[np.argmax(q_values[valid_indices])]
+            return self.nodes[best_idx]
+        return None
 
     def record_outcome(self, current: str, destination: str, next_hop: str,
                        delivered: bool, dropped: bool) -> None:
-        """Record the outcome of a forwarding decision and update Q-table."""
+        """Record the outcome of a forwarding decision and update Q-table.
+
+        Uses dynamic Pareto-optimal rewards based on actual link metrics.
+        """
         if not self.continuous_learning:
             return
 
@@ -165,15 +204,40 @@ class QLearningStrategy:
         if delivered:
             reward = 50.0
         elif dropped:
-            reward = -30.0
+            reward = -50.0
         else:
-            # Intermediate hop: small penalty proportional to distance remaining
-            next_idx = self.node_to_idx.get(next_hop, action)
-            reward = -1.0
+            # Dynamic intermediate reward based on link quality
+            reward = self._compute_hop_reward(current, next_hop)
 
-        next_state = (self.node_to_idx.get(next_hop, action), dest_idx)
+        next_idx = self.node_to_idx.get(next_hop, action)
+        next_congestion = _get_congestion_bucket(self.env, next_idx)
+        next_state = (next_idx, dest_idx, next_congestion)
         done = delivered or dropped
         self.agent.update(state, action, reward, next_state, done)
+
+    def _compute_hop_reward(self, current: str, next_hop: str) -> float:
+        """Compute Pareto-optimal intermediate hop reward from live topology metrics."""
+        try:
+            metrics = self.topo.get_link_metrics(current, next_hop)
+            latency = float(metrics.get("latency", 10.0))
+            bandwidth = float(metrics.get("bandwidth", 1000.0))
+        except (KeyError, AttributeError):
+            latency = 10.0
+            bandwidth = 1000.0
+
+        # Get next hop queue congestion
+        queue_ratio = 0.0
+        if next_hop in self.node_to_idx and self.router_nodes and next_hop in self.router_nodes:
+            node = self.router_nodes[next_hop]
+            if hasattr(node, "queue_length") and hasattr(node, "buffer_size"):
+                queue_ratio = node.queue_length / max(node.buffer_size, 1)
+
+        # Normalize
+        norm_latency = min(latency / 20.0, 1.0)  # 20ms as reference max
+        norm_bandwidth = min(bandwidth / 2000.0, 1.0)  # 2000 as reference max
+
+        # Pareto reward: good hops → small penalty, bad hops → large penalty
+        return -(1.0 + 3.0 * norm_latency + 3.0 * queue_ratio - 2.0 * norm_bandwidth)
 
     def save_learned_weights(self) -> None:
         """Save updated Q-table after continuous learning session."""
@@ -191,7 +255,7 @@ class DQNStrategy:
         self.node_to_idx = {node: i for i, node in enumerate(self.nodes)}
         self.continuous_learning = continuous_learning
 
-        obs_dim = 2 * num_nodes + 1
+        obs_dim = 3 * num_nodes + 1  # queues + dest + latencies + bandwidths
         self.agent = DQNAgent(
             state_dim=obs_dim,
             action_dim=num_nodes,
@@ -207,6 +271,9 @@ class DQNStrategy:
                     self.agent.epsilon_decay = 0.9999
             except Exception:
                 pass
+        # Optimize model for zero-overhead inference in the data plane
+        self.agent.optimize_for_inference()
+        self.fast_net = self.agent.export_to_numpy_fastpath()
         self.env = NetworkRoutingEnv(
             num_nodes=num_nodes,
             topology_graph=topo,
@@ -219,7 +286,8 @@ class DQNStrategy:
     def set_router_nodes(self, router_nodes: Dict[str, Any]) -> None:
         self.router_nodes = [router_nodes[n] for n in self.nodes]
 
-    def get_next_hop(self, current: str, destination: str) -> Optional[str]:
+    def get_next_hop(self, current: str, destination: str,
+                     prev_hop: Optional[str] = None) -> Optional[str]:
         if current == destination:
             return current
 
@@ -236,24 +304,43 @@ class DQNStrategy:
         })
 
         action_mask = self.env.get_action_mask(curr_idx)
-        action_idx = self.agent.choose_action(obs, valid_actions=action_mask)
 
-        if 0 <= action_idx < len(self.nodes) and action_mask[action_idx]:
+        # Anti-bounce: mask out the node we just came from
+        if prev_hop and prev_hop in self.node_to_idx:
+            prev_idx = self.node_to_idx[prev_hop]
+            if action_mask.sum() > 1:
+                action_mask[prev_idx] = False
+
+        # Fast-path NumPy Inference (non-blocking)
+        q_vals = self.fast_net.predict_q_values(obs)
+        valid_indices = np.where(action_mask)[0]
+        
+        if len(valid_indices) > 0:
+            if np.random.random() < self.agent.epsilon:
+                action_idx = int(np.random.choice(valid_indices))
+            else:
+                valid_q = q_vals[valid_indices]
+                best_actions = valid_indices[np.isclose(valid_q, np.max(valid_q))]
+                action_idx = int(np.random.choice(best_actions))
+        else:
+            action_idx = int(np.argmax(q_vals))
+
+        if 0 <= action_idx < len(self.nodes) and (len(valid_indices) == 0 or action_mask[action_idx]):
             chosen_hop = self.nodes[action_idx]
             if self.continuous_learning:
                 self._pending[f"{current}:{destination}"] = {
                     "obs": obs,
                     "action": action_idx,
                     "dest_idx": dest_idx,
+                    "current": current,
                 }
             return chosen_hop
 
-        neighbours = self.topo.get_neighbours(current)
-        return random.choice(neighbours) if neighbours else None
+        return None
 
     def record_outcome(self, current: str, destination: str, next_hop: str,
                        delivered: bool, dropped: bool) -> None:
-        """Record the outcome of a forwarding decision and update DQN."""
+        """Record the outcome and update DQN with dynamic Pareto rewards."""
         if not self.continuous_learning:
             return
 
@@ -269,9 +356,10 @@ class DQNStrategy:
         if delivered:
             reward = 50.0
         elif dropped:
-            reward = -30.0
+            reward = -50.0
         else:
-            reward = -1.0
+            # Dynamic intermediate reward based on link quality
+            reward = self._compute_hop_reward(pending["current"], next_hop)
 
         # Build next observation
         next_hop_idx = self.node_to_idx.get(next_hop, action)
@@ -288,11 +376,39 @@ class DQNStrategy:
         self._update_counter += 1
         if self._update_counter % self._target_update_freq == 0:
             self.agent.update_target_network()
+            # Update fastpath weights during continuous learning
+            self.fast_net = self.agent.export_to_numpy_fastpath()
+
+    def _compute_hop_reward(self, current: str, next_hop: str) -> float:
+        """Compute Pareto-optimal intermediate hop reward from live topology metrics."""
+        try:
+            metrics = self.topo.get_link_metrics(current, next_hop)
+            latency = float(metrics.get("latency", 10.0))
+            bandwidth = float(metrics.get("bandwidth", 1000.0))
+        except (KeyError, AttributeError):
+            latency = 10.0
+            bandwidth = 1000.0
+
+        # Get next hop queue congestion from live router nodes
+        queue_ratio = 0.0
+        next_idx = self.node_to_idx.get(next_hop)
+        if next_idx is not None and self.router_nodes:
+            node = self.router_nodes[next_idx]
+            if hasattr(node, "queue_length") and hasattr(node, "buffer_size"):
+                queue_ratio = node.queue_length / max(node.buffer_size, 1)
+
+        # Normalize
+        norm_latency = min(latency / 20.0, 1.0)
+        norm_bandwidth = min(bandwidth / 2000.0, 1.0)
+
+        # Pareto reward: good hops → small penalty, bad hops → large penalty
+        return -(1.0 + 3.0 * norm_latency + 3.0 * queue_ratio - 2.0 * norm_bandwidth)
 
     def save_learned_weights(self) -> None:
         """Save updated DQN model after continuous learning session."""
         if self.continuous_learning:
             self.agent.save_model("dqn_model.pt")
+
 
 
 def get_strategy(strategy_name: str, topo: TopologyManager, continuous_learning: bool = False) -> Any:
@@ -407,7 +523,7 @@ async def run_simulation(
         from neuroroute.network.chaos import ChaosScheduler
         logger.info("Chaos Engineering ENABLED: Injecting random link failures and latency spikes.")
         chaos_scheduler = ChaosScheduler(topo)
-        chaos_task = asyncio.create_task(chaos_scheduler.start(interval_seconds=0.2, duration_seconds=steps * 0.05))
+        chaos_task = asyncio.create_task(chaos_scheduler.start(interval_seconds=0.069, duration_seconds=steps * 0.05))
 
     tui_task = None
     if use_tui:

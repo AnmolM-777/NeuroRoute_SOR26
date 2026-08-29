@@ -1,18 +1,18 @@
 {
     "nodes": ["nodeA", "nodeB", "nodeC", "nodeD"],
     "links": [
-        {"from": "nodeA", "to": "nodeB", "latency": 50, "bandwidth": 100},
-        {"from": "nodeA", "to": "nodeC", "latency": 40, "bandwidth": 120},
-        {"from": "nodeA", "to": "nodeD", "latency": 80, "bandwidth": 80},
-        {"from": "nodeB", "to": "nodeC", "latency": 100, "bandwidth": 50},
-        {"from": "nodeB", "to": "nodeD", "latency": 20, "bandwidth": 200},
-        {"from": "nodeC", "to": "nodeD", "latency": 40, "bandwidth": 150},
+        {"from": "nodeA", "to": "nodeB", "latency": 5, "bandwidth": 1000},
+        {"from": "nodeA", "to": "nodeC", "latency": 4, "bandwidth": 1200},
+        {"from": "nodeA", "to": "nodeD", "latency": 8, "bandwidth": 800},
+        {"from": "nodeB", "to": "nodeC", "latency": 10, "bandwidth": 500},
+        {"from": "nodeB", "to": "nodeD", "latency": 2, "bandwidth": 2000},
+        {"from": "nodeC", "to": "nodeD", "latency": 4, "bandwidth": 1500},
 
-        {"from": "nodeB", "to": "nodeA", "latency": 70, "bandwidth": 100},
-        {"from": "nodeC", "to": "nodeA", "latency": 50, "bandwidth": 120},
-        {"from": "nodeD", "to": "nodeA", "latency": 50, "bandwidth": 80},
-        {"from": "nodeC", "to": "nodeB", "latency": 120, "bandwidth": 50},
-        {"from": "nodeD", "to": "nodeB", "latency": 50, "bandwidth": 200},
-        {"from": "nodeD", "to": "nodeC", "latency": 50, "bandwidth": 150}
+        {"from": "nodeB", "to": "nodeA", "latency": 7, "bandwidth": 1000},
+        {"from": "nodeC", "to": "nodeA", "latency": 5, "bandwidth": 1200},
+        {"from": "nodeD", "to": "nodeA", "latency": 5, "bandwidth": 800},
+        {"from": "nodeC", "to": "nodeB", "latency": 12, "bandwidth": 500},
+        {"from": "nodeD", "to": "nodeB", "latency": 5, "bandwidth": 2000},
+        {"from": "nodeD", "to": "nodeC", "latency": 5, "bandwidth": 1500}
     ]
 }
