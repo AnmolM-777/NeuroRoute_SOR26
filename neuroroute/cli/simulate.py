@@ -117,6 +117,7 @@ class QLearningStrategy:
 
         self.env = NetworkRoutingEnv(
             num_nodes=num_nodes,
+            max_queue_capacity=5,
             topology_graph=topo,
         )
 
@@ -276,6 +277,7 @@ class DQNStrategy:
         self.fast_net = self.agent.export_to_numpy_fastpath()
         self.env = NetworkRoutingEnv(
             num_nodes=num_nodes,
+            max_queue_capacity=5,
             topology_graph=topo,
         )
         self.router_nodes = None
@@ -488,7 +490,7 @@ async def run_simulation(
         logger.info("Continuous Learning ENABLED: Model weights will update during simulation.")
 
     router_nodes: Dict[str, SimRouterNode] = {
-        node_id: SimRouterNode(node_id, topo, strategy) for node_id in nodes
+        node_id: SimRouterNode(node_id, topo, strategy, buffer_size=5) for node_id in nodes
     }
 
     for node in router_nodes.values():

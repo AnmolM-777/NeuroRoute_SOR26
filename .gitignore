@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# training files
+q_table.json
+dqn_model.pt
+
 # Distribution / packaging
 .Python
 build/
