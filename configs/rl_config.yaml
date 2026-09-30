@@ -1,0 +1,46 @@
+# Reinforcement Learning & Control Plane Hyperparameters
+# Production Configuration with feature toggles for all 10 enhancements
+
+agent:
+  learning_rate: 0.0005      # Lowered for Dueling DQN stability (was 0.001)
+  gamma: 0.99
+  epsilon_start: 1.0         # Full exploration at start (was 0.15 — agent barely explored!)
+  epsilon_end: 0.05          # Minimum exploration floor (was 0.01)
+  epsilon_decay: 0.95        # Per-EPISODE decay: ep1→1.0, ep10→0.60, ep20→0.36, ep40→0.13
+  buffer_capacity: 10000
+  batch_size: 64
+  target_update_freq: 10
+  tau: 0.01                  # Faster soft target update (was 0.001 — target barely moved in 20 eps)
+  use_dueling: true          # Dueling DQN architecture (separated Value and Advantage streams)
+  double_dqn: true           # Double DQN (decorrelated action selection and target evaluation)
+  prioritized_replay: true   # Prioritized Experience Replay (PER with SumTree)
+  per_alpha: 0.6             # PER prioritization exponent
+  per_beta_start: 0.4        # PER importance sampling exponent (annealed to 1.0)
+  per_beta_frames: 100000
+  hidden_dims: [128, 128]
+
+control_plane:
+  update_interval_ms: 100    # Control evaluation cycle duration (10-100ms)
+  telemetry_window_ms: 100
+  max_simulation_steps: 600  # 600 steps * 100ms = 60 seconds simulation
+
+reward_function:
+  throughput_weight: 1.5     # α: reward for transmitted bits
+  drop_rate_weight: -10.0    # β: heavy penalty for packet drops (normalized 0-1)
+  latency_weight: -10.0      # γ: equal penalty for latency — DQN prefers fast, reliable paths
+  latency_ceiling_ms: 100.0  # Normalization ceiling: 3ms Path A → 0.03, 63ms Path B → 0.63
+
+hierarchical:
+  enabled: false             # Enable Hierarchical Multi-Agent coordination for 50+ node scale
+  num_regions: 2
+  global_reward_weight: 0.3
+
+curriculum:
+  enabled: false             # Enable progressive difficulty curriculum stages
+  stages: 3
+
+dashboard:
+  window_size: 5             # Moving average smoothing window
+  auto_save_plots: true
+  plot_dir: "plots"
+

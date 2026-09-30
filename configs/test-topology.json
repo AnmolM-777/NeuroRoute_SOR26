@@ -1,9 +1,0 @@
-{
-    "nodes" : ["nodeA", "nodeB", "nodeC", "nodeD"],
-    "links" : [
-        {"from": "nodeA", "to": "nodeB", "latency": 40, "bandwidth": 80},
-        {"from": "nodeB", "to": "nodeC", "latency": 20, "bandwidth": 120},
-        {"from": "nodeC", "to": "nodeD", "latency": 20, "bandwidth": 100},
-        {"from": "nodeB", "to": "nodeD", "latency": 30, "bandwidth": 100}
-    ]
-}

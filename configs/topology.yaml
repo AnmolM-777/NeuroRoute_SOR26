@@ -1,0 +1,71 @@
+# Network Topology Configuration
+# Defines routers, hosts, and directed interconnecting links with capacities and propagation latencies.
+
+nodes:
+  h1:
+    type: host
+    ip: "10.0.0.1"
+  h2:
+    type: host
+    ip: "10.0.0.2"
+  r1:
+    type: router
+  r2:
+    type: router
+  r3:
+    type: router
+  r4:
+    type: router
+
+links:
+  # Host h1 connections (5 ms propagation delay)
+  - src: h1
+    dst: r1
+    capacity: 1000   # Mbps (1 Gbps)
+    latency: 5000    # microseconds (5.0 ms)
+    max_queue_packets: 100
+
+  - src: r1
+    dst: h1
+    capacity: 1000
+    latency: 5000
+    max_queue_packets: 100
+
+  # Path A: r1 -> r2 -> r4 (Primary shortest path: 5ms + 5ms = 10ms core delay)
+  - src: r1
+    dst: r2
+    capacity: 15     # Mbps (Bottleneck link under heavy traffic)
+    latency: 5000    # microseconds (5.0 ms)
+    max_queue_packets: 100
+
+  - src: r2
+    dst: r4
+    capacity: 15     # Mbps
+    latency: 5000    # microseconds (5.0 ms)
+    max_queue_packets: 100
+
+  # Path B: r1 -> r3 -> r4 (Alternative path: 5.1ms + 5.1ms = 10.2ms core delay)
+  - src: r1
+    dst: r3
+    capacity: 20     # Mbps
+    latency: 5100    # microseconds (5.1 ms)
+    max_queue_packets: 100
+
+  - src: r3
+    dst: r4
+    capacity: 20     # Mbps
+    latency: 5100    # microseconds (5.1 ms)
+    max_queue_packets: 100
+
+  # Host h2 connections (5 ms propagation delay)
+  - src: r4
+    dst: h2
+    capacity: 1000
+    latency: 5000    # microseconds (5.0 ms)
+    max_queue_packets: 100
+
+  - src: h2
+    dst: r4
+    capacity: 1000
+    latency: 5000
+    max_queue_packets: 100

@@ -1,87 +1,62 @@
-import asyncio
 import pytest
-from neuroroute.network.algorithms import DijkstraRouter
-from neuroroute.network.chaos import ChaosScheduler
-from neuroroute.network.topology import TopologyManager
+import numpy as np
+
+from rl_sdn_controller.data_plane.chaos import ChaosEngine
+from rl_sdn_controller.data_plane.packet import Packet, LinkQueue
+from rl_sdn_controller.data_plane.traffic_gen import TrafficFlowGenerator
 
 
-@pytest.fixture
-def triangle_topology():
-  """Creates a 3-node triangle topology:
+def test_chaos_engine_link_flapping():
+    chaos_config = {
+        "chaos": {
+            "enabled": True,
+            "link_failure_probability": 1.0, # Force link failure for test
+            "link_repair_time_sec": 1.0,
+            "jitter_std_us": 0.0,
+            "random_drop_rate": 0.0
+        }
+    }
+    chaos = ChaosEngine(chaos_config)
+    link_key = ("r1", "r2")
+    chaos.register_links([link_key])
 
-  A --[2]--> B --[2]--> C
-  A --------[10]-------> C
-  """
-  topo = TopologyManager()
-  topo.add_link("A", "B", latency=2.0)
-  topo.add_link("B", "C", latency=2.0)
-  topo.add_link("A", "C", latency=10.0)
-  return topo
+    assert chaos.is_link_up("r1", "r2") is True
+    # Trigger state update
+    chaos.update(current_time=0.1, delta_time=1.0)
+    assert chaos.is_link_up("r1", "r2") is False
 
-
-def test_link_failure_path_recalculation(triangle_topology):
-  router = DijkstraRouter(triangle_topology)
-  chaos = ChaosScheduler(triangle_topology)
-
-  # Initial optimal path: A -> B -> C (latency = 4)
-  assert router.get_shortest_path("A", "C") == ["A", "B", "C"]
-
-  # Fail link B -> C
-  chaos.fail_link("B", "C")
-
-  # Recalculates to direct link: A -> C (latency = 10)
-  assert router.get_shortest_path("A", "C") == ["A", "C"]
-  assert router.get_next_hop("A", "C") == "C"
+    # Advance time beyond repair_time_sec
+    chaos.update(current_time=1.5, delta_time=1.0)
+    assert chaos.is_link_up("r1", "r2") is True
 
 
-def test_link_restoration(triangle_topology):
-  router = DijkstraRouter(triangle_topology)
-  chaos = ChaosScheduler(triangle_topology)
+def test_chaos_delay_jitter_and_random_drops():
+    chaos_config = {
+        "chaos": {
+            "enabled": True,
+            "jitter_std_us": 1000.0,
+            "latency_spike_probability": 0.0,
+            "random_drop_rate": 1.0 # Force drop
+        }
+    }
+    chaos = ChaosEngine(chaos_config)
+    assert chaos.should_drop_packet() is True
 
-  chaos.fail_link("B", "C")
-  assert router.get_shortest_path("A", "C") == ["A", "C"]
-
-  # Restore link B -> C
-  chaos.restore_link("B", "C")
-  assert router.get_shortest_path("A", "C") == ["A", "B", "C"]
-
-
-def test_latency_spike_rerouting(triangle_topology):
-  router = DijkstraRouter(triangle_topology)
-  chaos = ChaosScheduler(triangle_topology)
-
-  # Initial path: A -> B -> C (2 + 2 = 4)
-  assert router.get_shortest_path("A", "C") == ["A", "B", "C"]
-
-  # Spike latency on A -> B by 10x (2.0 * 10 = 20.0)
-  chaos.spike_latency("A", "B", chaos_factor=10.0)
-
-  # Path A -> B -> C total latency becomes 22, so router prefers direct A -> C (10)
-  assert router.get_shortest_path("A", "C") == ["A", "C"]
+    base_lat = 0.010 # 10ms
+    sampled_lat = chaos.sample_delay(base_lat)
+    assert sampled_lat > 0.0
 
 
-def test_node_dropout(triangle_topology):
-  router = DijkstraRouter(triangle_topology)
-  chaos = ChaosScheduler(triangle_topology)
-
-  # Drop node B completely
-  chaos.node_dropout("B")
-
-  assert triangle_topology.get_neighbours("B") == []
-  assert router.get_shortest_path("A", "C") == ["A", "C"]
-
-  # Restore node B
-  chaos.node_restore("B")
-  assert router.get_shortest_path("A", "C") == ["A", "B", "C"]
-
-
-@pytest.mark.asyncio
-async def test_async_chaos_scheduler_loop(triangle_topology):
-  chaos = ChaosScheduler(triangle_topology)
-
-  # Run scheduler for 0.15s with 0.05s intervals
-  asyncio.create_task(chaos.start(interval_seconds=0.05, duration_seconds=0.15))
-  await asyncio.sleep(0.2)
-
-  chaos.stop()
-  assert chaos._running is False
+def test_pareto_traffic_generator():
+    cfg = {
+        "id": "flow_pareto",
+        "src": "h1",
+        "dst": "h2",
+        "pattern": "pareto",
+        "rate_pps": 100,
+        "packet_size_bytes": 1000,
+        "duration_sec": 5.0
+    }
+    gen = TrafficFlowGenerator(cfg)
+    pkts = gen.generate_packets(current_time=0.0, delta_time=0.1)
+    assert len(pkts) > 0
