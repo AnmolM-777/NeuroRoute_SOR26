@@ -1,0 +1,20 @@
+# Network Chaos Engine Configuration
+# Configures real-world stochastic network impairments: link flapping, delay jitter, random packet loss, and heavy-tailed bursts.
+
+chaos:
+  enabled: true
+  
+  # Link Flapping & Outages
+  link_failure_probability: 0.05    # 5% chance of a link experiencing temporary failure per 10s
+  link_repair_time_sec: 2.0         # Duration of link outage before recovery
+
+  # Latency Jitter & Spikes
+  jitter_std_us: 20.0               # Standard deviation of delay jitter (microseconds)
+  latency_spike_probability: 0.02   # 2% chance of temporary latency spike
+  latency_spike_multiplier: 3.0     # 3x latency increase during spike
+
+  # Physical Layer Packet Drops (Noise/BER)
+  random_drop_rate: 0.01            # 1% baseline random packet loss probability
+
+  # Heavy-Tailed Traffic Burstiness
+  pareto_shape_alpha: 1.5           # Pareto shape parameter for heavy-tailed bursts (1.0 < alpha <= 2.0)

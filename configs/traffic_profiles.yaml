@@ -1,0 +1,47 @@
+# Traffic Profiles Configuration
+# Defines traffic generators, arrival distributions, packet sizes, and flow rates.
+# Supports 5 distinct traffic classes: Poisson, Bursty (Video), Realtime (VoIP), Bulk Transfer, and IoT Telemetry.
+
+flows:
+  - id: flow_h1_h2_primary
+    src: h1
+    dst: h2
+    pattern: poisson
+    rate_pps: 1200        # ~9.6 Mbps
+    packet_size_bytes: 1000
+    duration_sec: 60
+
+  - id: flow_h1_h2_burst
+    src: h1
+    dst: h2
+    pattern: bursty
+    rate_pps: 1500        # ~14.4 Mbps during burst
+    burst_on_ms: 1000
+    burst_off_ms: 1000
+    packet_size_bytes: 1200
+    duration_sec: 60
+
+  - id: flow_h2_h1_reverse
+    src: h2
+    dst: h1
+    pattern: poisson
+    rate_pps: 500         # ~3.2 Mbps
+    packet_size_bytes: 800
+    duration_sec: 60
+
+  - id: flow_h1_h2_voip
+    src: h1
+    dst: h2
+    pattern: realtime     # Ultra-low-latency VoIP traffic
+    interval_ms: 20.0
+    packet_size_bytes: 200
+    duration_sec: 60
+
+  - id: flow_h1_h2_iot
+    src: h1
+    dst: h2
+    pattern: iot          # High-frequency IoT telemetry sensor packets
+    interval_ms: 50.0
+    packet_size_bytes: 128
+    duration_sec: 60
+

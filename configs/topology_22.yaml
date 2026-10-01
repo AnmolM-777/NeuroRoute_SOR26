@@ -1,0 +1,188 @@
+# Alternative topology for run.py (latency in microseconds, capacity in Mbps).
+nodes:
+  h1:
+    type: host
+    ip: 10.0.0.1
+  h2:
+    type: host
+    ip: 10.0.0.2
+  r1:
+    type: router
+  r2:
+    type: router
+  r3:
+    type: router
+  r4:
+    type: router
+  r5:
+    type: router
+  r6:
+    type: router
+  r7:
+    type: router
+  r8:
+    type: router
+  r9:
+    type: router
+  r10:
+    type: router
+  r11:
+    type: router
+  r12:
+    type: router
+  r13:
+    type: router
+  r14:
+    type: router
+  r15:
+    type: router
+  r16:
+    type: router
+  r17:
+    type: router
+  r18:
+    type: router
+  r19:
+    type: router
+  r20:
+    type: router
+  r21:
+    type: router
+  r22:
+    type: router
+links:
+- src: h1
+  dst: r1
+  capacity: 1000
+  latency: 5000
+  max_queue_packets: 100
+- src: r1
+  dst: h1
+  capacity: 1000
+  latency: 5000
+  max_queue_packets: 100
+- src: r1
+  dst: r2
+  capacity: 15
+  latency: 1400
+  max_queue_packets: 100
+- src: r2
+  dst: r3
+  capacity: 15
+  latency: 1400
+  max_queue_packets: 100
+- src: r3
+  dst: r4
+  capacity: 15
+  latency: 1400
+  max_queue_packets: 100
+- src: r4
+  dst: r5
+  capacity: 15
+  latency: 1400
+  max_queue_packets: 100
+- src: r5
+  dst: r6
+  capacity: 15
+  latency: 1400
+  max_queue_packets: 100
+- src: r6
+  dst: r7
+  capacity: 15
+  latency: 1400
+  max_queue_packets: 100
+- src: r7
+  dst: r8
+  capacity: 15
+  latency: 1400
+  max_queue_packets: 100
+- src: r8
+  dst: r22
+  capacity: 15
+  latency: 1400
+  max_queue_packets: 100
+- src: r1
+  dst: r9
+  capacity: 20
+  latency: 1450
+  max_queue_packets: 100
+- src: r9
+  dst: r10
+  capacity: 20
+  latency: 1450
+  max_queue_packets: 100
+- src: r10
+  dst: r11
+  capacity: 20
+  latency: 1450
+  max_queue_packets: 100
+- src: r11
+  dst: r12
+  capacity: 20
+  latency: 1450
+  max_queue_packets: 100
+- src: r12
+  dst: r13
+  capacity: 20
+  latency: 1450
+  max_queue_packets: 100
+- src: r13
+  dst: r14
+  capacity: 20
+  latency: 1450
+  max_queue_packets: 100
+- src: r14
+  dst: r15
+  capacity: 20
+  latency: 1450
+  max_queue_packets: 100
+- src: r15
+  dst: r22
+  capacity: 20
+  latency: 1450
+  max_queue_packets: 100
+- src: r1
+  dst: r16
+  capacity: 25
+  latency: 1700
+  max_queue_packets: 100
+- src: r16
+  dst: r17
+  capacity: 25
+  latency: 1700
+  max_queue_packets: 100
+- src: r17
+  dst: r18
+  capacity: 25
+  latency: 1700
+  max_queue_packets: 100
+- src: r18
+  dst: r19
+  capacity: 25
+  latency: 1700
+  max_queue_packets: 100
+- src: r19
+  dst: r20
+  capacity: 25
+  latency: 1700
+  max_queue_packets: 100
+- src: r20
+  dst: r21
+  capacity: 25
+  latency: 1700
+  max_queue_packets: 100
+- src: r21
+  dst: r22
+  capacity: 25
+  latency: 1700
+  max_queue_packets: 100
+- src: r22
+  dst: h2
+  capacity: 1000
+  latency: 5000
+  max_queue_packets: 100
+- src: h2
+  dst: r22
+  capacity: 1000
+  latency: 5000
+  max_queue_packets: 100

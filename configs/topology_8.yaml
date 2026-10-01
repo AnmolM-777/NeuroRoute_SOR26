@@ -1,0 +1,90 @@
+# Alternative topology for run.py (latency in microseconds, capacity in Mbps).
+nodes:
+  h1:
+    type: host
+    ip: 10.0.0.1
+  h2:
+    type: host
+    ip: 10.0.0.2
+  r1:
+    type: router
+  r2:
+    type: router
+  r3:
+    type: router
+  r4:
+    type: router
+  r5:
+    type: router
+  r6:
+    type: router
+  r7:
+    type: router
+  r8:
+    type: router
+links:
+- src: h1
+  dst: r1
+  capacity: 1000
+  latency: 5000
+  max_queue_packets: 100
+- src: r1
+  dst: h1
+  capacity: 1000
+  latency: 5000
+  max_queue_packets: 100
+- src: r1
+  dst: r2
+  capacity: 15
+  latency: 3500
+  max_queue_packets: 100
+- src: r2
+  dst: r5
+  capacity: 15
+  latency: 3500
+  max_queue_packets: 100
+- src: r5
+  dst: r8
+  capacity: 15
+  latency: 3500
+  max_queue_packets: 100
+- src: r1
+  dst: r3
+  capacity: 20
+  latency: 3600
+  max_queue_packets: 100
+- src: r3
+  dst: r6
+  capacity: 20
+  latency: 3600
+  max_queue_packets: 100
+- src: r6
+  dst: r8
+  capacity: 20
+  latency: 3600
+  max_queue_packets: 100
+- src: r1
+  dst: r4
+  capacity: 25
+  latency: 3700
+  max_queue_packets: 100
+- src: r4
+  dst: r7
+  capacity: 25
+  latency: 3700
+  max_queue_packets: 100
+- src: r7
+  dst: r8
+  capacity: 25
+  latency: 3700
+  max_queue_packets: 100
+- src: r8
+  dst: h2
+  capacity: 1000
+  latency: 5000
+  max_queue_packets: 100
+- src: h2
+  dst: r8
+  capacity: 1000
+  latency: 5000
+  max_queue_packets: 100
